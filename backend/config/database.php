@@ -1,7 +1,7 @@
 <?php
 // Configuration de la base de données avec le bon port
 $host = 'localhost';
-$port = '3310';  // IMPORTANT: Votre MySQL utilise le port 3310
+$port = '3306';  // IMPORTANT: Votre MySQL utilise le port 3310
 $dbname = 'smart_residence';
 $username = 'root';
 $password = '';  // Pas de mot de passe d'après votre config
@@ -22,4 +22,5 @@ try {
     die("Erreur de connexion: " . $e->getMessage() . "<br>
          Vérifiez que MySQL tourne sur le port 3310");
 }
+
 ?>

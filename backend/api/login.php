@@ -17,38 +17,23 @@ require_once '../models/Resident.php';
 $user = new User();
 $residentModel = new Resident();
 
-// RÉCUPÉRER LES DONNÉES - VERSION AMÉLIORÉE
-$email = '';
-$password = '';
-
-// 1. Essayer de récupérer depuis php://input (JSON)
+// RÉCUPÉRER LES DONNÉES
 $input = file_get_contents("php://input");
 $data = json_decode($input, true);
 
 if ($data && isset($data['email']) && isset($data['password'])) {
-    // Format JSON
     $email = $data['email'];
     $password = $data['password'];
     $source = 'JSON';
-} 
-// 2. Essayer depuis POST (form-data)
-else if (isset($_POST['email']) && isset($_POST['password'])) {
+} else if (isset($_POST['email']) && isset($_POST['password'])) {
     $email = $_POST['email'];
     $password = $_POST['password'];
     $source = 'POST';
-}
-// 3. Essayer depuis GET (pour test)
-else if (isset($_GET['email']) && isset($_GET['password'])) {
+} else if (isset($_GET['email']) && isset($_GET['password'])) {
     $email = $_GET['email'];
     $password = $_GET['password'];
     $source = 'GET';
 }
-
-// DÉBOGAGE - À SUPPRIMER PLUS TARD
-error_log("Source: " . ($source ?? 'aucune'));
-error_log("Email: " . $email);
-error_log("Password: " . $password);
-error_log("Raw input: " . file_get_contents("php://input"));
 
 if (!empty($email) && !empty($password)) {
     $result = $user->login($email, $password);
@@ -60,15 +45,16 @@ if (!empty($email) && !empty($password)) {
         $_SESSION['user_name'] = $result['nom'];
         $_SESSION['complex_id'] = $result['complex_id'];
         
+        // 🔴 CORRECTION: Forcer les IDs en int
         $response = [
             "success" => true,
             "message" => "Connexion réussie (via $source)",
             "user" => [
-                "id" => $result['id'],
+                "id" => (int)$result['id'],                    // ← CAST en int
                 "nom" => $result['nom'],
                 "email" => $result['email'],
                 "role" => $result['role'],
-                "complex_id" => $result['complex_id'],
+                "complex_id" => (int)$result['complex_id'],    // ← CAST en int
                 "complex_nom" => $result['complex_nom'] ?? null
             ]
         ];
@@ -76,7 +62,7 @@ if (!empty($email) && !empty($password)) {
         if($result['role'] == 'resident') {
             $resident = $residentModel->getResidentByUserId($result['id']);
             if($resident) {
-                $response['user']['resident_id'] = $resident['id'];
+                $response['user']['resident_id'] = (int)$resident['id'];        // ← CAST en int
                 $response['user']['numero_appartement'] = $resident['numero_appartement'];
                 $response['user']['batiment'] = $resident['batiment'];
             }
@@ -92,7 +78,7 @@ if (!empty($email) && !empty($password)) {
 } else {
     echo json_encode([
         "success" => false,
-        "message" => "Email et mot de passe requis. (Reçu: email=" . ($email ?: 'vide') . ", password=" . ($password ?: 'vide') . ", source=" . ($source ?? 'aucune') . ")"
+        "message" => "Email et mot de passe requis"
     ]);
 }
 ?>

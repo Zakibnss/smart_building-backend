@@ -10,21 +10,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'OPTIONS') {
 }
 
 require_once '../../config/database.php';
-require_once '../../utils/auth.php';
-
-// Vérifier que l'utilisateur est admin
-/*
-$user_id = authenticate();
-$stmt = $pdo->prepare("SELECT role FROM utilisateur WHERE id = ?");
-$stmt->execute([$user_id]);
-$user = $stmt->fetch(PDO::FETCH_ASSOC);
-
-if ($user['role'] != 'admin') {
-    http_response_code(403);
-    echo json_encode(['success' => false, 'message' => 'Accès non autorisé']);
-    exit();
-}
-*/
 
 try {
     $method = $_SERVER['REQUEST_METHOD'];
@@ -57,13 +42,11 @@ try {
                 // Historique des attributions
                 $stmt = $pdo->query("
                     SELECT pp.*, p.numero_place, p.type, 
-                           u.nom as resident_nom, r.numero_appartement,
-                           a.nom as assigne_par_nom
+                           u.nom as resident_nom, r.numero_appartement
                     FROM place_parking pp
                     JOIN parking p ON pp.parking_id = p.id
                     LEFT JOIN resident r ON pp.resident_id = r.id
                     LEFT JOIN utilisateur u ON r.utilisateur_id = u.id
-                    LEFT JOIN utilisateur a ON pp.assigne_par = a.id
                     ORDER BY pp.date_assignation DESC
                     LIMIT 50
                 ");
@@ -105,6 +88,11 @@ try {
 
         case 'POST':
             $data = json_decode(file_get_contents("php://input"), true);
+
+            if (!$data) {
+                echo json_encode(['success' => false, 'message' => 'Données JSON invalides']);
+                break;
+            }
 
             if (isset($data['action']) && $data['action'] == 'configure') {
                 // Configurer le parking
@@ -178,7 +166,9 @@ try {
                     ");
                     $stmt->execute([$data['parking_id']]);
                     if (!$stmt->fetch()) {
-                        throw new Exception('Place déjà occupée');
+                        echo json_encode(['success' => false, 'message' => 'Place déjà occupée']);
+                        $pdo->rollBack();
+                        break;
                     }
 
                     // Assigner la place
@@ -189,12 +179,12 @@ try {
                     ");
                     $stmt->execute([$data['resident_id'], $data['parking_id']]);
 
-                    // Enregistrer dans l'historique
+                    // Enregistrer dans l'historique (optionnel)
                     $stmt = $pdo->prepare("
-                        INSERT INTO place_parking (parking_id, resident_id, complex_id, assigne_par)
-                        VALUES (?, ?, 1, ?)
+                        INSERT INTO place_parking (parking_id, resident_id, complex_id)
+                        VALUES (?, ?, 1)
                     ");
-                    $stmt->execute([$data['parking_id'], $data['resident_id'], $user_id]);
+                    $stmt->execute([$data['parking_id'], $data['resident_id']]);
 
                     $pdo->commit();
 
@@ -205,13 +195,18 @@ try {
 
                 } catch (Exception $e) {
                     $pdo->rollBack();
-                    throw $e;
+                    echo json_encode(['success' => false, 'message' => 'Erreur: ' . $e->getMessage()]);
                 }
             }
             break;
 
         case 'PUT':
             $data = json_decode(file_get_contents("php://input"), true);
+
+            if (!$data) {
+                echo json_encode(['success' => false, 'message' => 'Données JSON invalides']);
+                break;
+            }
 
             if (isset($data['action']) && $data['action'] == 'liberer') {
                 if (!isset($data['parking_id'])) {
@@ -243,7 +238,7 @@ try {
 
                 } catch (Exception $e) {
                     $pdo->rollBack();
-                    throw $e;
+                    echo json_encode(['success' => false, 'message' => 'Erreur: ' . $e->getMessage()]);
                 }
             }
             break;
@@ -255,9 +250,9 @@ try {
     }
 } catch (PDOException $e) {
     http_response_code(500);
-    echo json_encode(['success' => false, 'message' => 'Erreur: ' . $e->getMessage()]);
+    echo json_encode(['success' => false, 'message' => 'Erreur base de données: ' . $e->getMessage()]);
 } catch (Exception $e) {
     http_response_code(500);
-    echo json_encode(['success' => false, 'message' => 'Erreur: ' . $e->getMessage()]);
+    echo json_encode(['success' => false, 'message' => 'Erreur serveur: ' . $e->getMessage()]);
 }
 ?>

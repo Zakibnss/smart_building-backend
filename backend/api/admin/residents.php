@@ -9,303 +9,244 @@ if ($_SERVER['REQUEST_METHOD'] == 'OPTIONS') {
     exit();
 }
 
-// Activer l'affichage des erreurs pour le débogage
-error_reporting(E_ALL);
-ini_set('display_errors', 1);
-
-require_once '../../config/database.php';
+require_once '../config.php';
 
 try {
     $method = $_SERVER['REQUEST_METHOD'];
+    $id = $_GET['id'] ?? null;
 
-    switch ($method) {
-        case 'GET':
-            if (isset($_GET['id'])) {
-                $stmt = $pdo->prepare("
-                    SELECT u.id, u.nom, u.email, u.telephone, 
-                           r.numero_appartement, r.batiment
-                    FROM utilisateur u
-                    LEFT JOIN resident r ON u.id = r.utilisateur_id
-                    WHERE u.role = 'resident' AND u.id = ?
-                ");
-                $stmt->execute([$_GET['id']]);
-                $resident = $stmt->fetch(PDO::FETCH_ASSOC);
-                
-                if ($resident) {
-                    echo json_encode([
-                        'success' => true,
-                        'resident' => $resident
-                    ]);
-                } else {
-                    http_response_code(404);
-                    echo json_encode([
-                        'success' => false,
-                        'message' => 'Résident non trouvé'
-                    ]);
-                }
-            } else {
-                $stmt = $pdo->query("
-                    SELECT u.id, u.nom, u.email, u.telephone, 
-                           r.numero_appartement, r.batiment
-                    FROM utilisateur u
-                    LEFT JOIN resident r ON u.id = r.utilisateur_id
-                    WHERE u.role = 'resident'
-                    ORDER BY r.numero_appartement
-                ");
-                $residents = $stmt->fetchAll(PDO::FETCH_ASSOC);
-                
-                echo json_encode([
-                    'success' => true,
-                    'residents' => $residents
-                ]);
-            }
-            break;
-
-        case 'POST':
-            $data = json_decode(file_get_contents("php://input"), true);
-            
-            if (!isset($data['nom']) || !isset($data['email']) || !isset($data['password'])) {
-                http_response_code(400);
-                echo json_encode([
-                    'success' => false,
-                    'message' => 'Nom, email et mot de passe sont requis'
-                ]);
-                break;
-            }
-
-            // Vérifier si l'email existe déjà
-            $stmt = $pdo->prepare("SELECT id FROM utilisateur WHERE email = ?");
-            $stmt->execute([$data['email']]);
-            if ($stmt->fetch()) {
-                http_response_code(400);
-                echo json_encode([
-                    'success' => false,
-                    'message' => 'Cet email est déjà utilisé'
-                ]);
-                break;
-            }
-
-            // Récupérer un complex_id valide (par défaut 1)
-            $complex_id = 1;
-            
-            // Vérifier si le complex_id existe
-            $stmt = $pdo->prepare("SELECT id FROM complex WHERE id = ?");
-            $stmt->execute([$complex_id]);
-            if (!$stmt->fetch()) {
-                // Si le complexe n'existe pas, le créer
-                $stmt = $pdo->prepare("INSERT INTO complex (nom, adresse) VALUES ('Complexe Principal', 'Adresse par défaut')");
-                $stmt->execute();
-                $complex_id = $pdo->lastInsertId();
-            }
-
-            $pdo->beginTransaction();
-
-            try {
-                // Insérer dans utilisateur
-                $stmt = $pdo->prepare("
-                    INSERT INTO utilisateur (nom, email, password, telephone, role, complex_id) 
-                    VALUES (?, ?, MD5(?), ?, 'resident', ?)
-                ");
-                $stmt->execute([
-                    $data['nom'],
-                    $data['email'],
-                    $data['password'],
-                    $data['telephone'] ?? null,
-                    $complex_id
-                ]);
-
-                $userId = $pdo->lastInsertId();
-
-                // Insérer dans resident
-                $stmt = $pdo->prepare("
-                    INSERT INTO resident (utilisateur_id, complex_id, numero_appartement, batiment) 
-                    VALUES (?, ?, ?, ?)
-                ");
-                $stmt->execute([
-                    $userId,
-                    $complex_id,
-                    $data['numero_appartement'] ?? '',
-                    $data['batiment'] ?? ''
-                ]);
-
-                $pdo->commit();
-
-                echo json_encode([
-                    'success' => true,
-                    'message' => 'Résident ajouté avec succès',
-                    'id' => $userId
-                ]);
-
-            } catch (Exception $e) {
-                $pdo->rollBack();
-                throw $e;
-            }
-            break;
-
-        case 'PUT':
-            if (!isset($_GET['id'])) {
-                http_response_code(400);
-                echo json_encode([
-                    'success' => false,
-                    'message' => 'ID requis'
-                ]);
-                break;
-            }
-
-            $data = json_decode(file_get_contents("php://input"), true);
-            
-            $pdo->beginTransaction();
-
-            try {
-                // Mettre à jour utilisateur
-                $sql = "UPDATE utilisateur SET nom = ?, email = ?, telephone = ?";
-                $params = [$data['nom'], $data['email'], $data['telephone'] ?? null];
-
-                if (isset($data['password']) && !empty($data['password'])) {
-                    $sql .= ", password = MD5(?)";
-                    $params[] = $data['password'];
-                }
-
-                $sql .= " WHERE id = ?";
-                $params[] = $_GET['id'];
-
-                $stmt = $pdo->prepare($sql);
-                $stmt->execute($params);
-
-                // Mettre à jour resident
-                $stmt = $pdo->prepare("
-                    UPDATE resident 
-                    SET numero_appartement = ?, batiment = ? 
-                    WHERE utilisateur_id = ?
-                ");
-                $stmt->execute([
-                    $data['numero_appartement'] ?? '',
-                    $data['batiment'] ?? '',
-                    $_GET['id']
-                ]);
-
-                $pdo->commit();
-
-                echo json_encode([
-                    'success' => true,
-                    'message' => 'Résident modifié avec succès'
-                ]);
-
-            } catch (Exception $e) {
-                $pdo->rollBack();
-                throw $e;
-            }
-            break;
-
-            case 'DELETE':
-                if (!isset($_GET['id'])) {
-                    http_response_code(400);
-                    echo json_encode([
-                        'success' => false,
-                        'message' => 'ID requis'
-                    ]);
-                    break;
-                }
-            
-                $userId = intval($_GET['id']);
-                
-                // Vérifier si l'utilisateur existe
-                $stmt = $pdo->prepare("SELECT id FROM utilisateur WHERE id = ? AND role = 'resident'");
-                $stmt->execute([$userId]);
-                if (!$stmt->fetch()) {
-                    http_response_code(404);
-                    echo json_encode([
-                        'success' => false,
-                        'message' => 'Résident non trouvé'
-                    ]);
-                    break;
-                }
-            
-                // Commencer une transaction
-                $pdo->beginTransaction();
-            
-                try {
-                    // 1. Récupérer l'ID du résident
-                    $stmt = $pdo->prepare("SELECT id FROM resident WHERE utilisateur_id = ?");
-                    $stmt->execute([$userId]);
-                    $resident = $stmt->fetch(PDO::FETCH_ASSOC);
-                    
-                    if ($resident) {
-                        $residentId = $resident['id'];
-                        
-                        // 2. Récupérer les IDs des services de ce résident
-                        $stmt = $pdo->prepare("SELECT id FROM service WHERE resident_id = ?");
-                        $stmt->execute([$residentId]);
-                        $services = $stmt->fetchAll(PDO::FETCH_COLUMN);
-                        
-                        // 3. Supprimer les missions liées à ces services
-                        if (!empty($services)) {
-                            $placeholders = implode(',', array_fill(0, count($services), '?'));
-                            $stmt = $pdo->prepare("DELETE FROM mission WHERE service_id IN ($placeholders)");
-                            $stmt->execute($services);
-                        }
-                        
-                        // 4. Supprimer les smartmailbox
-                        $stmt = $pdo->prepare("DELETE FROM smartmailbox WHERE resident_id = ?");
-                        $stmt->execute([$residentId]);
-                        
-                        // 5. Supprimer les colis
-                        $stmt = $pdo->prepare("DELETE FROM colis WHERE resident_id = ?");
-                        $stmt->execute([$residentId]);
-                        
-                        // 6. Supprimer les réclamations
-                        $stmt = $pdo->prepare("DELETE FROM reclamation WHERE resident_id = ?");
-                        $stmt->execute([$residentId]);
-                        
-                        // 7. Supprimer les services
-                        $stmt = $pdo->prepare("DELETE FROM service WHERE resident_id = ?");
-                        $stmt->execute([$residentId]);
-                        
-                        // 8. Libérer les places de parking
-                        $stmt = $pdo->prepare("UPDATE parking SET resident_id = NULL WHERE resident_id = ?");
-                        $stmt->execute([$residentId]);
-                        
-                        // 9. Supprimer le résident
-                        $stmt = $pdo->prepare("DELETE FROM resident WHERE id = ?");
-                        $stmt->execute([$residentId]);
-                    }
-            
-                    // 10. Supprimer les notifications
-                    $stmt = $pdo->prepare("DELETE FROM notification WHERE utilisateur_id = ?");
-                    $stmt->execute([$userId]);
-            
-                    // 11. Supprimer l'utilisateur
-                    $stmt = $pdo->prepare("DELETE FROM utilisateur WHERE id = ?");
-                    $stmt->execute([$userId]);
-            
-                    $pdo->commit();
-            
-                    echo json_encode([
-                        'success' => true,
-                        'message' => 'Résident et toutes ses données associées supprimés avec succès'
-                    ]);
-            
-                } catch (Exception $e) {
-                    $pdo->rollBack();
-                    throw $e;
-                }
-                break;
-
-        default:
-            http_response_code(405);
+    // GET - Récupérer tous les résidents
+    if ($method === 'GET' && !$id) {
+        $query = "SELECT r.id, u.nom, u.email, u.telephone, 
+                         r.numero_appartement, r.batiment, r.date_entree,
+                         u.statut, u.date_creation
+                  FROM resident r
+                  JOIN utilisateur u ON r.utilisateur_id = u.id
+                  WHERE u.role = 'resident'
+                  ORDER BY r.numero_appartement";
+        
+        $stmt = $pdo->prepare($query);
+        $stmt->execute();
+        $residents = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        echo json_encode([
+            'success' => true,
+            'residents' => $residents
+        ]);
+        exit;
+    }
+    
+    // GET - Détail d'un résident
+    if ($method === 'GET' && $id) {
+        $query = "SELECT r.id, u.nom, u.email, u.telephone, 
+                         r.numero_appartement, r.batiment, r.date_entree,
+                         u.statut, u.date_creation
+                  FROM resident r
+                  JOIN utilisateur u ON r.utilisateur_id = u.id
+                  WHERE u.role = 'resident' AND r.id = :id";
+        
+        $stmt = $pdo->prepare($query);
+        $stmt->execute([':id' => $id]);
+        $resident = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        echo json_encode([
+            'success' => true,
+            'resident' => $resident
+        ]);
+        exit;
+    }
+    
+    // POST - Ajouter un résident
+    if ($method === 'POST') {
+        $input = json_decode(file_get_contents('php://input'), true);
+        
+        // Vérifier si l'utilisateur existe déjà
+        $checkQuery = "SELECT id FROM utilisateur WHERE email = :email";
+        $stmt = $pdo->prepare($checkQuery);
+        $stmt->execute([':email' => $input['email']]);
+        
+        if ($stmt->fetch()) {
             echo json_encode([
                 'success' => false,
-                'message' => 'Méthode non autorisée'
+                'message' => 'Cet email est déjà utilisé'
             ]);
-            break;
+            exit;
+        }
+        
+        $pdo->beginTransaction();
+        
+        try {
+            // Créer l'utilisateur
+            $userQuery = "INSERT INTO utilisateur (complex_id, nom, email, password, telephone, role, statut) 
+                          VALUES (1, :nom, :email, MD5(:password), :telephone, 'resident', 'actif')";
+            $stmt = $pdo->prepare($userQuery);
+            $stmt->execute([
+                ':nom' => $input['nom'],
+                ':email' => $input['email'],
+                ':password' => $input['password'] ?? '123456',
+                ':telephone' => $input['telephone']
+            ]);
+            $userId = $pdo->lastInsertId();
+            
+            // Créer le résident
+            $residentQuery = "INSERT INTO resident (utilisateur_id, complex_id, numero_appartement, batiment, date_entree) 
+                              VALUES (:user_id, 1, :appartement, :batiment, NOW())";
+            $stmt = $pdo->prepare($residentQuery);
+            $stmt->execute([
+                ':user_id' => $userId,
+                ':appartement' => $input['appartement'],
+                ':batiment' => $input['batiment']
+            ]);
+            
+            $pdo->commit();
+            
+            echo json_encode([
+                'success' => true,
+                'message' => 'Résident ajouté avec succès',
+                'id' => $pdo->lastInsertId()
+            ]);
+        } catch (Exception $e) {
+            $pdo->rollBack();
+            throw $e;
+        }
+        exit;
     }
-
-} catch (PDOException $e) {
-    http_response_code(500);
-    echo json_encode([
-        'success' => false,
-        'message' => 'Erreur de base de données: ' . $e->getMessage()
-    ]);
+    
+    // PUT - Modifier un résident
+    if ($method === 'PUT' && $id) {
+        $input = json_decode(file_get_contents('php://input'), true);
+        
+        $pdo->beginTransaction();
+        
+        try {
+            // Mettre à jour l'utilisateur
+            $userQuery = "UPDATE utilisateur SET nom = :nom, email = :email, telephone = :telephone 
+                          WHERE id = (SELECT utilisateur_id FROM resident WHERE id = :resident_id)";
+            $stmt = $pdo->prepare($userQuery);
+            $stmt->execute([
+                ':nom' => $input['nom'],
+                ':email' => $input['email'],
+                ':telephone' => $input['telephone'],
+                ':resident_id' => $id
+            ]);
+            
+            // Mettre à jour le résident
+            $residentQuery = "UPDATE resident SET numero_appartement = :appartement, batiment = :batiment 
+                              WHERE id = :id";
+            $stmt = $pdo->prepare($residentQuery);
+            $stmt->execute([
+                ':appartement' => $input['appartement'],
+                ':batiment' => $input['batiment'],
+                ':id' => $id
+            ]);
+            
+            $pdo->commit();
+            
+            echo json_encode([
+                'success' => true,
+                'message' => 'Résident modifié avec succès'
+            ]);
+        } catch (Exception $e) {
+            $pdo->rollBack();
+            throw $e;
+        }
+        exit;
+    }
+    
+    // DELETE - Supprimer un résident (avec archivage)
+    if ($method === 'DELETE' && $id) {
+        $pdo->beginTransaction();
+        
+        try {
+            // 1. Récupérer les informations du résident avant suppression
+            $residentQuery = "SELECT r.*, u.nom, u.email, u.telephone, u.date_creation 
+                              FROM resident r
+                              JOIN utilisateur u ON r.utilisateur_id = u.id
+                              WHERE r.id = :id";
+            $stmt = $pdo->prepare($residentQuery);
+            $stmt->execute([':id' => $id]);
+            $resident = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$resident) {
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Résident non trouvé'
+                ]);
+                exit;
+            }
+            
+            // 2. Récupérer les réclamations du résident
+            $reclamationsQuery = "SELECT id, titre, description, categorie, statut, date_creation 
+                                   FROM reclamation WHERE resident_id = :resident_id";
+            $stmt = $pdo->prepare($reclamationsQuery);
+            $stmt->execute([':resident_id' => $id]);
+            $reclamations = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            // 3. Récupérer les colis du résident
+            $colisQuery = "SELECT id, type_colis, description, code_retrait, statut, date_arrivee 
+                           FROM colis WHERE resident_id = :resident_id";
+            $stmt = $pdo->prepare($colisQuery);
+            $stmt->execute([':resident_id' => $id]);
+            $colis = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            // 4. Récupérer les services demandés
+            $servicesQuery = "SELECT id, titre, description, type_service, statut, date_demande 
+                              FROM service WHERE resident_id = :resident_id";
+            $stmt = $pdo->prepare($servicesQuery);
+            $stmt->execute([':resident_id' => $id]);
+            $services = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            // 5. Récupérer les accès visiteurs
+            $accesQuery = "SELECT id, nom_visiteur, cin, appartement, code_acces, duree, date_arrivee, statut 
+                           FROM acces_visiteurs WHERE appartement = :appartement";
+            $stmt = $pdo->prepare($accesQuery);
+            $stmt->execute([':appartement' => $resident['numero_appartement']]);
+            $accesVisiteurs = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            // 6. Archiver les données
+            $archiveQuery = "INSERT INTO resident_archive (
+                resident_id, date_suppression, raison_suppression, supprime_par,
+                reclamations_data, colis_data, services_data, acces_visiteurs_data
+            ) VALUES (
+                :resident_id, NOW(), :raison, :supprime_par,
+                :reclamations, :colis, :services, :acces
+            )";
+            
+            $stmt = $pdo->prepare($archiveQuery);
+            $stmt->execute([
+                ':resident_id' => $id,
+                ':raison' => 'Supprimé par administrateur',
+                ':supprime_par' => 'Admin',
+                ':reclamations' => json_encode($reclamations, JSON_UNESCAPED_UNICODE),
+                ':colis' => json_encode($colis, JSON_UNESCAPED_UNICODE),
+                ':services' => json_encode($services, JSON_UNESCAPED_UNICODE),
+                ':acces' => json_encode($accesVisiteurs, JSON_UNESCAPED_UNICODE)
+            ]);
+            
+            // 7. Mettre à jour le statut de l'utilisateur (soft delete)
+            $updateQuery = "UPDATE utilisateur SET statut = 'inactif' 
+                            WHERE id = :user_id";
+            $stmt = $pdo->prepare($updateQuery);
+            $stmt->execute([':user_id' => $resident['utilisateur_id']]);
+            
+            $pdo->commit();
+            
+            echo json_encode([
+                'success' => true,
+                'message' => 'Résident supprimé et archivé avec succès'
+            ]);
+        } catch (Exception $e) {
+            $pdo->rollBack();
+            echo json_encode([
+                'success' => false,
+                'message' => 'Erreur lors de la suppression: ' . $e->getMessage()
+            ]);
+        }
+        exit;
+    }
+    
+    echo json_encode(['success' => false, 'message' => 'Méthode non supportée']);
+    
 } catch (Exception $e) {
     http_response_code(500);
     echo json_encode([

@@ -20,7 +20,7 @@ try {
     
 } catch(PDOException $e) {
     die("Erreur de connexion: " . $e->getMessage() . "<br>
-         Vérifiez que MySQL tourne sur le port 3310");
+         Vérifiez que MySQL tourne sur le port 3306");
 }
 
 ?>

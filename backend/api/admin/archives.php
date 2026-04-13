@@ -20,7 +20,7 @@ try {
         $query = "SELECT r.id, u.nom, u.email, u.telephone, 
                          r.numero_appartement as appartement, r.batiment,
                          u.date_creation,
-                         a.date_suppression, a.raison_suppression, 
+                         a.id as archive_id, a.date_suppression, a.raison_suppression, 
                          a.supprime_par, a.reclamations_data, a.colis_data, 
                          a.services_data, a.acces_visiteurs_data
                   FROM resident_archive a
@@ -91,16 +91,25 @@ try {
             $pdo->beginTransaction();
             
             try {
-                // 1. Supprimer l'archive
+                // 1. Récupérer l'utilisateur_id avant de supprimer l'archive
+                $getUserQuery = "SELECT utilisateur_id FROM resident WHERE id = :resident_id";
+                $stmt = $pdo->prepare($getUserQuery);
+                $stmt->execute([':resident_id' => $resident_id]);
+                $resident = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                if (!$resident) {
+                    throw new Exception('Résident non trouvé');
+                }
+                
+                // 2. Supprimer l'archive
                 $deleteQuery = "DELETE FROM resident_archive WHERE resident_id = :resident_id";
                 $stmt = $pdo->prepare($deleteQuery);
                 $stmt->execute([':resident_id' => $resident_id]);
                 
-                // 2. Marquer le résident comme actif
-                $updateQuery = "UPDATE utilisateur SET statut = 'actif' 
-                                WHERE id = (SELECT utilisateur_id FROM resident WHERE id = :resident_id)";
+                // 3. Marquer le résident comme actif
+                $updateQuery = "UPDATE utilisateur SET statut = 'actif' WHERE id = :user_id";
                 $stmt = $pdo->prepare($updateQuery);
-                $stmt->execute([':resident_id' => $resident_id]);
+                $stmt->execute([':user_id' => $resident['utilisateur_id']]);
                 
                 $pdo->commit();
                 
@@ -116,21 +125,77 @@ try {
         }
     }
     
-    // DELETE - Supprimer définitivement une archive
+    // DELETE - Supprimer définitivement une archive (suppression complète)
     if ($method === 'DELETE' && $archive_id) {
-        $query = "DELETE FROM resident_archive WHERE id = :id";
-        $stmt = $pdo->prepare($query);
-        $result = $stmt->execute([':id' => $archive_id]);
+        $pdo->beginTransaction();
         
-        if ($result) {
+        try {
+            // 1. Récupérer les informations avant suppression
+            $getArchiveQuery = "SELECT a.resident_id, r.utilisateur_id, u.email, u.nom
+                               FROM resident_archive a
+                               JOIN resident r ON a.resident_id = r.id
+                               JOIN utilisateur u ON r.utilisateur_id = u.id
+                               WHERE a.id = :id";
+            $stmt = $pdo->prepare($getArchiveQuery);
+            $stmt->execute([':id' => $archive_id]);
+            $archive = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$archive) {
+                throw new Exception('Archive non trouvée');
+            }
+            
+            $resident_id = $archive['resident_id'];
+            $utilisateur_id = $archive['utilisateur_id'];
+            
+            // 2. Supprimer les données associées (réclamations, colis, services, accès visiteurs)
+            // Réclamations
+            $stmt = $pdo->prepare("DELETE FROM reclamation WHERE resident_id = :resident_id");
+            $stmt->execute([':resident_id' => $resident_id]);
+            
+            // Colis
+            $stmt = $pdo->prepare("DELETE FROM colis WHERE resident_id = :resident_id");
+            $stmt->execute([':resident_id' => $resident_id]);
+            
+            // Services
+            $stmt = $pdo->prepare("DELETE FROM service WHERE resident_id = :resident_id");
+            $stmt->execute([':resident_id' => $resident_id]);
+            
+            // Place parking (libérer la place)
+            $stmt = $pdo->prepare("UPDATE parking SET resident_id = NULL, statut = 'libre' WHERE resident_id = :resident_id");
+            $stmt->execute([':resident_id' => $resident_id]);
+            
+            // Notifications
+            $stmt = $pdo->prepare("DELETE FROM notification WHERE utilisateur_id = :utilisateur_id");
+            $stmt->execute([':utilisateur_id' => $utilisateur_id]);
+            
+            // Smartmailbox (si existe)
+            $stmt = $pdo->prepare("DELETE FROM smartmailbox WHERE resident_id = :resident_id");
+            $stmt->execute([':resident_id' => $resident_id]);
+            
+            // 3. Supprimer le résident
+            $stmt = $pdo->prepare("DELETE FROM resident WHERE id = :resident_id");
+            $stmt->execute([':resident_id' => $resident_id]);
+            
+            // 4. Supprimer l'utilisateur
+            $stmt = $pdo->prepare("DELETE FROM utilisateur WHERE id = :utilisateur_id");
+            $stmt->execute([':utilisateur_id' => $utilisateur_id]);
+            
+            // 5. Supprimer l'archive (déjà fait par la requête suivante, mais on le fait explicitement)
+            $stmt = $pdo->prepare("DELETE FROM resident_archive WHERE id = :id");
+            $stmt->execute([':id' => $archive_id]);
+            
+            $pdo->commit();
+            
             echo json_encode([
                 'success' => true,
-                'message' => 'Archive supprimée définitivement'
+                'message' => 'Archive et toutes les données associées supprimées définitivement'
             ]);
-        } else {
+            
+        } catch (Exception $e) {
+            $pdo->rollBack();
             echo json_encode([
                 'success' => false,
-                'message' => 'Erreur lors de la suppression'
+                'message' => 'Erreur lors de la suppression: ' . $e->getMessage()
             ]);
         }
         exit;

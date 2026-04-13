@@ -16,7 +16,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'OPTIONS') {
     exit();
 }
 // Configuration de la base de données
-define('DB_HOST', 'localhost:3310'); // Votre port MySQL
+define('DB_HOST', 'localhost:3306'); // Votre port MySQL
 define('DB_NAME', 'smart_residence');
 define('DB_USER', 'root');
 define('DB_PASS', '');
